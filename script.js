@@ -1,38 +1,32 @@
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby0wRyLs7tQFpiP0x3N_K_2zVvPAMPWACBaazToSQt6iVZtIY2dk0xm7vsTmJGXPcPRtg/exec";
 
-// IMPORTANT: Jo Hugging Face ka Direct URL aapne copy kiya hai, use yahan paste karein (bina aakhiri slash '/' ke)
-const HUGGING_FACE_API_URL = "https://pvc-cropper-api-pvc-cropper-api.hf.space";
+// IMPORTANT: Hugging Face space ka link yahan dalein, lekin is baar spaces format wala username/space-name format daalna hai, jaise neeche diya hai:
+const HF_SPACE_NAME = "pvc-cropper-api/pvc-cropper-api"; 
 
 let currentUser = "";
 
-// 1. LOGIN LOGIC
-async function loginUser() {
+// Window object me global login function de rahe hain kyunki script ek module hai
+window.loginUser = async function() {
     const userInp = document.getElementById("username").value;
     const passInp = document.getElementById("password").value;
     const errorTxt = document.getElementById("login-error");
 
     if(!userInp || !passInp) return alert("Please fill all fields");
 
-    try {
-        currentUser = userInp;
-        document.getElementById("login-box").classList.add("hidden");
-        document.getElementById("dashboard").classList.remove("hidden");
-        document.getElementById("user-display").innerText = currentUser;
-        document.getElementById("wallet-balance").innerText = "50"; 
-        
-        fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST",
-            mode: "no-cors",
-            body: JSON.stringify({ action: "login", userId: userInp, password: passInp })
-        });
-    } catch (err) {
-        errorTxt.innerText = "Server Error. Try Again!";
-        errorTxt.classList.remove("hidden");
-    }
+    currentUser = userInp;
+    document.getElementById("login-box").classList.add("hidden");
+    document.getElementById("dashboard").classList.remove("hidden");
+    document.getElementById("user-display").innerText = currentUser;
+    document.getElementById("wallet-balance").innerText = "46"; // Syncing with your current balance
+
+    fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        body: JSON.stringify({ action: "login", userId: userInp, password: passInp })
+    });
 }
 
-// 2. FILE UPLOAD HANDLER
-function handleFileUpload() {
+window.handleFileUpload = function() {
     const fileInput = document.getElementById("document-file");
     const statusTxt = document.getElementById("upload-status");
     const btn = document.getElementById("process-btn");
@@ -43,8 +37,7 @@ function handleFileUpload() {
     }
 }
 
-// 3. MULTI-CARD PROCESSING WITH PYTHON INTEGRATION (FINAL)
-async function processSelectedCard() {
+window.processSelectedCard = async function() {
     let currentBal = parseFloat(document.getElementById("wallet-balance").innerText);
     const cardType = document.getElementById("card-type").value;
     const pdfPassword = document.getElementById("pdf-password").value;
@@ -58,12 +51,11 @@ async function processSelectedCard() {
         return alert("Please upload a file first!");
     }
 
-    // Button loading state
     btn.innerText = "⏳ Processing... Please Wait...";
     btn.disabled = true;
 
     try {
-        // Step A: Deduct ₹2 from Google Sheet Database
+        // Step 1: Wallet Balance Deduct from Google Sheets
         await fetch(GOOGLE_SCRIPT_URL, {
             method: "POST",
             mode: "no-cors",
@@ -73,56 +65,40 @@ async function processSelectedCard() {
         currentBal -= 2;
         document.getElementById("wallet-balance").innerText = currentBal;
 
-        // Step B: Send file to Hugging Face Python Engine
+        // Step 2: Call Hugging Face via official Gradio Client library (Smooth Upload Fix)
         const file = fileInput.files[0];
         
-        // Gradio API standard format requires data array
-        const formData = new FormData();
-        formData.append("data", file); 
-        // We will pass text inputs via query params or multi-part depending on Gradio version,
-        // for standard zero-code endpoint wrapper, sending directly via Gradio API fetch:
+        // Gradio client auto-initialization
+        const { client } = await import("https://cdn.jsdelivr.net/npm/@gradio/client@0.1.4/dist/index.min.js");
+        const app = await client(HF_SPACE_NAME);
         
-        let reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = async function () {
-            const base64Data = reader.result;
+        // Processing request
+        const result = await app.predict("/crop_to_pvc", [
+            file,         // Uploaded Image/PDF file blob
+            cardType,     // Drodown type string (voter/passport_photo etc)
+            pdfPassword   // Encrypted text password string
+        ]);
 
-            const response = await fetch(`${HUGGING_FACE_API_URL}/api/predict`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    data: [
-                        { "name": file.name, "data": base64Data },
-                        cardType,
-                        pdfPassword
-                    ]
-                })
-            });
-
-            const result = await response.json();
+        if (result && result.data && result.data[0]) {
+            // Gradio client return direct file temporary access URL
+            const fileUrl = result.data[0].url;
             
-            if (result && result.data && result.data[0]) {
-                // Download file generated by Python
-                const fileUrl = `${HUGGING_FACE_API_URL}/file=${result.data[0].name}`;
-                
-                const downloadAnchor = document.createElement("a");
-                downloadAnchor.href = fileUrl;
-                downloadAnchor.download = `${cardType}_pvc_ready.png`;
-                document.body.appendChild(downloadAnchor);
-                downloadAnchor.click();
-                document.body.removeChild(downloadAnchor);
-                
-                alert("✨ Premium PVC layout generated and downloaded successfully!");
-            } else {
-                alert("Processing failed on engine. Check file format or password.");
-            }
+            const downloadAnchor = document.createElement("a");
+            downloadAnchor.href = fileUrl;
+            downloadAnchor.download = `${cardType}_processed_ready.png`;
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            document.body.removeChild(downloadAnchor);
             
-            btn.innerText = "⚙️ Process Card & Deduct ₹2";
-            btn.disabled = false;
-        };
+            alert("✨ Success! Premium Passport Photo Sheet / PVC Card Downloaded Successfully.");
+        } else {
+            alert("Processing error on engine. Please check file format or parameters.");
+        }
 
     } catch(e) {
-        alert("Transaction or Engine connection failed!");
+        console.error(e);
+        alert("Engine Connection Error or Transaction Issue! Check console logs.");
+    } finally {
         btn.innerText = "⚙️ Process Card & Deduct ₹2";
         btn.disabled = false;
     }
